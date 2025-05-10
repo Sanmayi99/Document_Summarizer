@@ -1,4 +1,4 @@
-import gradio as gr
+'''import gradio as gr
 from transformers import pipeline
 from PyPDF2 import PdfReader
 import docx
@@ -45,3 +45,199 @@ iface = gr.Interface(
 
 if __name__ == "__main__":
     iface.launch(share=True)
+
+
+import gradio as gr
+from transformers import pipeline
+from PyPDF2 import PdfReader
+import docx
+
+# Default summarizer (can later change based on domain)
+summarizer_models = {
+    "General": pipeline("summarization", model="facebook/bart-large-cnn"),
+    "Legal": pipeline("summarization", model="facebook/bart-large-cnn"),   # Placeholder
+    "Medical": pipeline("summarization", model="facebook/bart-large-cnn"), # Placeholder
+}
+
+def read_pdf(file):
+    reader = PdfReader(file)
+    text = ''
+    for page in reader.pages:
+        text += page.extract_text()
+    return text
+
+def read_docx(file):
+    doc = docx.Document(file)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+def summarize_file(file, domain):
+    if file.name.endswith(".pdf"):
+        text = read_pdf(file)
+    elif file.name.endswith(".docx"):
+        text = read_docx(file)
+    elif file.name.endswith(".txt"):
+        text = file.read().decode("utf-8")
+    else:
+        return "Unsupported file format."
+
+    if not text.strip():
+        return "The file is empty or could not extract text."
+
+    # Limit to first 3000 characters for summarization
+    text = text[:3000]
+
+    # Use the selected domain's summarizer (can swap in specific models later)
+    summarizer = summarizer_models.get(domain, summarizer_models["General"])
+    summary = summarizer(text, max_length=150, min_length=30, do_sample=False)
+    return summary[0]['summary_text']
+
+iface = gr.Interface(
+    fn=summarize_file,
+    inputs=[
+        gr.File(file_types=[".pdf", ".docx", ".txt"]),
+        gr.Dropdown(["General", "Legal", "Medical"], label="Select Document Domain", value="General")
+    ],
+    outputs="text",
+    title="AI Document Summarizer",
+    description="Upload a .pdf, .docx, or .txt file and choose a domain to get a summary using BART."
+)
+
+if __name__ == "__main__":
+    iface.launch(share=True)
+    
+import gradio as gr
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+from PyPDF2 import PdfReader
+import docx
+
+# Load multilingual model
+model_name = "csebuetnlp/mT5_multilingual_XLSum"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+
+# Languages supported by mT5_multilingual_XLSum
+supported_languages = [
+    "english", "hindi", "telugu", "french", "german", "spanish", "bengali", "tamil", "marathi", "urdu"
+    # (Add more as needed from the model's card)
+]
+
+def read_pdf(file):
+    reader = PdfReader(file)
+    return "".join([page.extract_text() for page in reader.pages])
+
+def read_docx(file):
+    doc = docx.Document(file)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+def summarize_file(file, language):
+    if file.name.endswith(".pdf"):
+        text = read_pdf(file)
+    elif file.name.endswith(".docx"):
+        text = read_docx(file)
+    elif file.name.endswith(".txt"):
+        text = file.read().decode("utf-8")
+    else:
+        return "Unsupported file format."
+
+    if not text.strip():
+        return "The file is empty or unreadable."
+
+    text = text[:3000]
+
+    # Prepare input as per mT5 format
+    prefix = f"summarize {language}: "
+    inputs = tokenizer(prefix + text, return_tensors="pt", max_length=1024, truncation=True)
+    summary_ids = model.generate(inputs["input_ids"], max_length=150, min_length=30, length_penalty=2.0, num_beams=4)
+    summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+
+    return summary
+
+iface = gr.Interface(
+    fn=summarize_file,
+    inputs=[
+        gr.File(file_types=[".pdf", ".docx", ".txt"]),
+        gr.Dropdown(supported_languages, label="Select Language", value="english")
+    ],
+    outputs="text",
+    title="Multilingual AI Document Summarizer",
+    description="Upload a document and get summaries in multiple languages using mT5."
+)
+
+if __name__ == "__main__":
+    iface.launch(share=True)'''
+
+
+import gradio as gr
+from PyPDF2 import PdfReader
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+
+# Load summarizer model (LaMini-Flan-T5)
+summarizer_tokenizer = AutoTokenizer.from_pretrained("MBZUAI/LaMini-Flan-T5-248M")
+summarizer_model = AutoModelForSeq2SeqLM.from_pretrained("MBZUAI/LaMini-Flan-T5-248M")
+
+# Load translators
+translator_hi = pipeline("translation", model="Helsinki-NLP/opus-mt-en-hi")
+translator_te = pipeline("translation", model="Helsinki-NLP/opus-mt-en-mul")
+
+# Extract text from PDF
+def extract_text_from_pdf(file):
+    reader = PdfReader(file)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text()
+    return text
+
+# Summarize based on doc type
+def summarize_text(text, doc_type):
+    prompt = f"Summarize this {doc_type} document clearly:\n{text}\nSummary:"
+    inputs = summarizer_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+    outputs = summarizer_model.generate(**inputs, max_length=300, num_beams=4, early_stopping=True)
+    return summarizer_tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+# Translate summary
+def translate_summary(summary, lang):
+    if lang == "hindi":
+        return translator_hi(summary)[0]["translation_text"]
+    elif lang == "telugu":
+        return translator_te(summary)[0]["translation_text"]
+    else:
+        return summary  # English or unsupported
+
+# Main processing logic
+def process(file, lang, doc_type):
+    text = extract_text_from_pdf(file)
+    if not text.strip():
+        return "Error: PDF has no extractable text."
+    
+    summary = summarize_text(text, doc_type)
+    return translate_summary(summary, lang)
+
+# Gradio UI
+with gr.Blocks() as app:
+    gr.Markdown("## Multilingual AI Document Summarizer")
+    gr.Markdown("Upload a document and get summaries in multiple languages using mT5.")
+
+    file_input = gr.File(label="Upload PDF")
+
+    with gr.Row():
+        language_input = gr.Dropdown(
+            label="Select Language",
+            choices=["english", "hindi", "telugu"],
+            value="english"
+        )
+        type_input = gr.Dropdown(
+            label="Select Document Type",
+            choices=["legal", "medical", "general"],
+            value="general"
+        )
+
+    output = gr.Textbox(label="Summary Output", lines=10)
+
+    with gr.Row():
+        clear = gr.Button("Clear")
+        submit = gr.Button("Submit")
+
+    submit.click(fn=process, inputs=[file_input, language_input, type_input], outputs=output)
+    clear.click(lambda: "", inputs=[], outputs=output)
+
+app.launch()
